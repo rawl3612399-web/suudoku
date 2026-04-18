@@ -488,13 +488,11 @@ body {
 
 .number-pad__btn {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
   font-weight: 600;
-  padding: 8px 0 6px;
-  min-height: 60px;
+  padding: 14px 0;
+  min-height: 56px;
   border-radius: 10px;
   border: 1px solid #cfd8dc;
   background: #fff;
@@ -509,40 +507,18 @@ body {
   line-height: 1;
 }
 
-.number-pad__remaining {
-  font-size: 10px;
-  color: #607d8b;
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-}
-
 .number-pad__btn:active {
   background: #e3f2fd;
 }
 
 .number-pad__btn--clear {
   color: #d32f2f;
-  justify-content: center;
 }
 
 .number-pad__btn--complete {
-  background: #37474f;
-  color: #eceff1;
-  border-color: #263238;
-}
-
-.number-pad__btn--complete .number-pad__digit {
-  text-decoration: line-through;
-  text-decoration-thickness: 2px;
-  text-decoration-color: rgba(255, 255, 255, 0.7);
-  opacity: 0.85;
-}
-
-.number-pad__btn--complete .number-pad__remaining {
-  color: #80cbc4;
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0;
+  background: #f5f5f5;
+  color: #b0bec5;
+  border-color: #e0e0e0;
 }
 
 .number-pad__btn:disabled {

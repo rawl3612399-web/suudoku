@@ -17,9 +17,9 @@ describe('NumberPad', () => {
     expect(screen.getByTestId('pad-clear')).toBeInTheDocument();
   });
 
-  it('shows remaining count per digit', () => {
+  it('shows only the digit (no remaining count)', () => {
     render(<NumberPad />);
-    expect(screen.getByTestId('pad-1').textContent).toMatch(/\/9/);
+    expect(screen.getByTestId('pad-1').textContent?.trim()).toBe('1');
   });
 
   it('disables digit when fully placed (count >= 9)', () => {
@@ -38,7 +38,7 @@ describe('NumberPad', () => {
     expect(screen.getByTestId('pad-7')).toBeDisabled();
   });
 
-  it('marks fully-placed digit with --complete class and ✓ indicator', () => {
+  it('marks fully-placed digit with --complete class (greyed out)', () => {
     useGameStore.getState().newGame('easy', 12345);
     useGameStore.getState().startGame();
     const { solution, board } = useGameStore.getState();
@@ -54,7 +54,6 @@ describe('NumberPad', () => {
     const btn = screen.getByTestId('pad-4');
     expect(btn).toHaveAttribute('data-complete', 'true');
     expect(btn.className).toContain('number-pad__btn--complete');
-    expect(btn.textContent).toContain('✓');
     expect(btn.getAttribute('aria-label')).toContain('使い切り');
   });
 
