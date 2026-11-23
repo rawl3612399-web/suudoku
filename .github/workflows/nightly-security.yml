@@ -7,7 +7,8 @@
 #     直しは AI ではなく決まった手順（npm audit fix --ignore-scripts）。変わったのが package.json と package-lock.json だけで、
 #     package.json は部品の版の欄だけかを機械で確かめる。Claude は「読む」道具だけで、PR の説明文を書くだけ（ファイルもコマンドも触れない）。
 #     差分はこの仕事で部品の処理を一度も動かさないまま受け渡す。
-#   - 仕事「試験とビルド」：鍵なし。差分を当てて試験とビルドを回す。ここで部品の処理が動くが、受け渡した差分には触れられない。
+#   - 仕事「試験とビルド」：鍵なし。差分を当てて試験とビルドを回す。ここで部品の処理が動く。受け渡しの物を置き換えても、
+#     直す仕事が出した指紋（sha256）と合わないので、PR の仕事が止まる。
 #   - 仕事2「PR にする」：書き込みの鍵を持つが、部品も AI も動かさない。受け取った差分の確かめをすべてやり直し（npm の公式の外から取る部品も止める）、決まった名前のブランチに push して PR を作る。
 # 鍵：リポジトリの Actions の秘密 ANTHROPIC_API_KEY（安藤が入れる）。無ければ Claude の説明文は省き、件数の表だけで PR を作る。
 # 止め方：Actions の画面でこのワークフローを Disable にする。
@@ -39,6 +40,7 @@ jobs:
       contents: read
     outputs:
       changed: ${{ steps.guard.outputs.changed }}
+      sums: ${{ steps.handoff.outputs.sums }}   # 受け渡す3つのファイルの指紋。PR の仕事はこれと合わなければ止まる
     steps:
       - uses: actions/checkout@v6
         with:
@@ -138,9 +140,12 @@ jobs:
 
       - name: 受け渡す（この仕事では部品の処理を一度も動かしていない）
         if: steps.guard.outputs.changed == 'true'
+        id: handoff
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           cp "$RUNNER_TEMP/fix.patch" "$RUNNER_TEMP/table.md" "$RUNNER_TEMP/summary.md" "$RUNNER_TEMP/out/"
+          cd "$RUNNER_TEMP/out"
+          echo "sums=$(sha256sum fix.patch table.md summary.md | awk '{printf "%s:%s ", $2, $1}')" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         if: steps.guard.outputs.changed == 'true'
         with:
@@ -196,6 +201,21 @@ jobs:
         with:
           name: nightly-fix
           path: ${{ runner.temp }}/in
+
+      - name: 受け取ったファイルの指紋を、直す仕事が出したものと照らす（試験の仕事が置き換えていれば止まる）
+        env:
+          SUMS: ${{ needs.fix.outputs.sums }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/in"
+          [ "$(ls -A | sort | tr '\n' ' ')" = "fix.patch summary.md table.md " ] || { echo "受け取ったファイルの並びが違う"; ls -A; exit 1; }
+          set -- $SUMS
+          [ "$#" -eq 3 ] || { echo "指紋の数が違う"; exit 1; }
+          for pair in "$@"; do
+            f="${pair%%:*}"; want="${pair#*:}"
+            got="$(sha256sum "$f" | cut -d' ' -f1)"
+            [ "$got" = "$want" ] || { echo "$f の指紋が合わない"; exit 1; }
+          done
 
       - name: 前の晩の PR が開いていれば、作らずに終わる
         id: open
