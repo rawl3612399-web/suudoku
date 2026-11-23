@@ -6,8 +6,9 @@
 #   - 仕事1「直す」：書き込みの鍵を持たない（contents: read・checkout の鍵も残さない）。部品は入れるときの処理（install scripts）を動かさずに入れる。
 #     直しは AI ではなく決まった手順（npm audit fix --ignore-scripts）。変わったのが package.json と package-lock.json だけで、
 #     package.json は部品の版の欄だけかを機械で確かめる。Claude は「読む」道具だけで、PR の説明文を書くだけ（ファイルもコマンドも触れない）。
-#     試験とビルドは Claude のあと、鍵の無い状態で動かす。
-#   - 仕事2「PR にする」：書き込みの鍵を持つが、部品も AI も動かさない。受け取った差分をもう一度確かめ、決まった名前のブランチに push して PR を作る。
+#     差分はこの仕事で部品の処理を一度も動かさないまま受け渡す。
+#   - 仕事「試験とビルド」：鍵なし。差分を当てて試験とビルドを回す。ここで部品の処理が動くが、受け渡した差分には触れられない。
+#   - 仕事2「PR にする」：書き込みの鍵を持つが、部品も AI も動かさない。受け取った差分の確かめをすべてやり直し（npm の公式の外から取る部品も止める）、決まった名前のブランチに push して PR を作る。
 # 鍵：リポジトリの Actions の秘密 ANTHROPIC_API_KEY（安藤が入れる）。無ければ Claude の説明文は省き、件数の表だけで PR を作る。
 # 止め方：Actions の画面でこのワークフローを Disable にする。
 
@@ -135,16 +136,7 @@ jobs:
           fi
           wc -c "$RUNNER_TEMP/summary.md"
 
-      - name: 試験とビルド（鍵の無い状態で。ここだけ部品の処理を動かす）
-        if: steps.guard.outputs.changed == 'true'
-        env:
-          npm_config_ignore_scripts: "false"
-        run: |
-          npm rebuild
-          npm test
-          npm run build
-
-      - name: 受け渡す
+      - name: 受け渡す（この仕事では部品の処理を一度も動かしていない）
         if: steps.guard.outputs.changed == 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/out"
@@ -156,10 +148,40 @@ jobs:
           path: ${{ runner.temp }}/out/
           retention-days: 7
 
-  pr:
-    name: PR にする（部品も AI も動かさない）
+  test:
+    name: 試験とビルド（鍵なし・受け渡しの差分には触れない）
     needs: fix
     if: needs.fix.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-fix
+          path: ${{ runner.temp }}/in
+      - name: 差分を当てる
+        run: git apply "$RUNNER_TEMP/in/fix.patch"
+      - name: 試験とビルド（ここだけ部品の処理を動かす）
+        env:
+          npm_config_ignore_scripts: "false"
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+  pr:
+    name: PR にする（部品も AI も動かさない）
+    needs: [fix, test]
+    if: needs.fix.outputs.changed == 'true' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -192,6 +214,19 @@ jobs:
           extra="$(printf '%s\n' "$files" | grep -vxE 'package\.json|package-lock\.json' || true)"
           if [ -n "$extra" ]; then echo "決めていないファイルが入っている：$extra"; exit 1; fi
           git apply "$RUNNER_TEMP/in/fix.patch"
+          git show HEAD:package.json > "$RUNNER_TEMP/package.before.json"
+          # package.json は部品の版の欄だけ・package-lock.json の取得先は npm の公式だけ（部品の処理は動かさない。node は使うが npm は使わない）
+          node -e '
+            const fs = require("fs");
+            const strip = (p) => { const j = JSON.parse(fs.readFileSync(p, "utf8"));
+              for (const k of ["dependencies", "devDependencies", "optionalDependencies"]) delete j[k]; return JSON.stringify(j); };
+            if (strip(process.argv[1]) !== strip("package.json")) { console.error("package.json の部品の版の欄の外が変わった"); process.exit(1); }
+            const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+            const bad = Object.entries(lock.packages || {})
+              .filter(([k, v]) => (v.resolved && !v.resolved.startsWith("https://registry.npmjs.org/")) || (k !== "" && v.link))
+              .map(([k, v]) => `${k} ${v.resolved}`);
+            if (bad.length) { console.error("npm の公式の外から取る部品か、手元のフォルダを指す部品がある：\n" + bad.slice(0, 10).join("\n")); process.exit(1); }
+          ' "$RUNNER_TEMP/package.before.json"
 
       - name: 決まった名前のブランチに push して PR を作る
         if: steps.open.outputs.count == '0'
@@ -211,8 +246,8 @@ jobs:
             echo "## 件数"; echo; cat "$RUNNER_TEMP/in/table.md"; echo
             if [ -s "$RUNNER_TEMP/in/summary.md" ]; then echo "## 説明（Claude Code が読んで書いたもの）"; echo; cat "$RUNNER_TEMP/in/summary.md"; echo; fi
             echo "## 確かめたこと"; echo
-            echo "- 変わったのは package.json と package-lock.json だけ（package.json は部品の版の欄だけ）"
-            echo "- npm test と npm run build が通った"
+            echo "- この PR の仕事で確かめ直した：変わったのは package.json と package-lock.json だけ・package.json は部品の版の欄だけ・部品の取得先は npm の公式だけ"
+            echo "- 試験とビルドの仕事（鍵なし）は成功で終わった。ただしその仕事は部品のコードを動かすので、結果は参考。マージの前に Vercel のプレビューで画面を確かめる"
             echo; echo "マージすると Vercel で公開されます。確かめてからマージしてください。"
           } > "$RUNNER_TEMP/body.md"
           gh pr create --base main --head "$branch" \
